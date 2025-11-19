@@ -236,7 +236,7 @@ component("pdfium") {
     "fpdfsdk",
     "fpdfsdk/formfiller",
     "fxjs",
-    "third_party/qpdf:libqpdf",
+    "third_party/iqpdf:libqpdf",
   ]
 
   public_deps = [
