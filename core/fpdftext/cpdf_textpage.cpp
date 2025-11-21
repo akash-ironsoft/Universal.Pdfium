@@ -110,13 +110,13 @@ DataVector<wchar_t> GetUnicodeNormalization(wchar_t wch) {
   }
   wch = wFind & 0x0FFF;
   wFind >>= 12;
-  auto pMap = kUnicodeDataNormalizationMaps[wFind - 2].subspan(
+  auto maps = kUnicodeDataNormalizationMaps[wFind - 2].subspan(
       static_cast<size_t>(wch));
   if (wFind == 4) {
-    wFind = pMap.front();
-    pMap = pMap.subspan<1u>();
+    wFind = maps.front();
+    maps = maps.subspan<1u>();
   }
-  const auto range = pMap.first(static_cast<size_t>(wFind));
+  const auto range = maps.first(static_cast<size_t>(wFind));
   return DataVector<wchar_t>(range.begin(), range.end());
 }
 
@@ -149,6 +149,11 @@ bool IsControlChar(const CPDF_TextPage::CharInfo& char_info) {
 
 bool IsHyphenCode(wchar_t c) {
   return c == 0x2D || c == 0xAD;
+}
+
+bool IsNormalCharacter(const CPDF_TextPage::CharInfo& char_info) {
+  return char_info.unicode() != 0 ? !IsControlChar(char_info)
+                                  : char_info.char_code() != 0;
 }
 
 bool IsRectIntersect(const CFX_FloatRect& rect1, const CFX_FloatRect& rect2) {
@@ -322,8 +327,10 @@ CFX_FloatRect GetLooseBounds(const CPDF_TextPage::CharInfo& charinfo) {
       // values will not.
       float bottom = font_bbox.bottom * font_size / 1000;
       float top = font_bbox.top * font_size / 1000;
-      CFX_FloatRect char_box(left, bottom, right, top);
-      return charinfo.matrix().TransformRect(char_box);
+      CFX_FloatRect char_box = charinfo.matrix().TransformRect(
+          CFX_FloatRect(left, bottom, right, top));
+      char_box.Union(charinfo.char_box());
+      return char_box;
     }
   }
 
@@ -383,8 +390,7 @@ void CPDF_TextPage::Init() {
   for (int i = 0; i < nCount; ++i) {
     const CharInfo& charinfo = char_list_[i];
     if (charinfo.char_type() == CharType::kGenerated ||
-        (charinfo.unicode() != 0 && !IsControlChar(charinfo)) ||
-        (charinfo.unicode() == 0 && charinfo.char_code() != 0)) {
+        IsNormalCharacter(charinfo)) {
       char_indices_.back().count++;
       skipped = true;
     } else {
@@ -753,11 +759,11 @@ void CPDF_TextPage::ProcessObject() {
       ProcessFormObject(pObj->AsForm(), CFX_Matrix());
     }
   }
-  for (const auto& obj : mTextObjects) {
+  for (const auto& obj : text_objects_) {
     ProcessTextObject(obj);
   }
 
-  mTextObjects.clear();
+  text_objects_.clear();
   CloseTempLine();
 }
 
@@ -781,48 +787,50 @@ void CPDF_TextPage::ProcessFormObject(CPDF_FormObject* pFormObj,
 
 void CPDF_TextPage::AddCharInfoByLRDirection(wchar_t wChar,
                                              const CharInfo& info) {
-  CharInfo info2 = info;
-  if (IsControlChar(info2)) {
-    char_list_.push_back(info2);
+  if (!IsNormalCharacter(info)) {
+    char_list_.push_back(info);
     return;
   }
+
   DataVector<wchar_t> normalized;
   if (wChar >= 0xFB00 && wChar <= 0xFB06) {
     normalized = GetUnicodeNormalization(wChar);
   }
   if (normalized.empty()) {
     text_buf_.AppendChar(wChar);
-    char_list_.push_back(info2);
+    char_list_.push_back(info);
     return;
   }
-  info2.set_char_type(CharType::kPiece);
+  CharInfo modified_info = info;
+  modified_info.set_char_type(CharType::kPiece);
   for (wchar_t normalized_char : normalized) {
-    info2.set_unicode(normalized_char);
+    modified_info.set_unicode(normalized_char);
     text_buf_.AppendChar(normalized_char);
-    char_list_.push_back(info2);
+    char_list_.push_back(modified_info);
   }
 }
 
 void CPDF_TextPage::AddCharInfoByRLDirection(wchar_t wChar,
                                              const CharInfo& info) {
-  CharInfo info2 = info;
-  if (IsControlChar(info2)) {
-    char_list_.push_back(info2);
+  if (!IsNormalCharacter(info)) {
+    char_list_.push_back(info);
     return;
   }
+
+  CharInfo modified_info = info;
   wChar = pdfium::unicode::GetMirrorChar(wChar);
   DataVector<wchar_t> normalized = GetUnicodeNormalization(wChar);
   if (normalized.empty()) {
-    info2.set_unicode(wChar);
+    modified_info.set_unicode(wChar);
     text_buf_.AppendChar(wChar);
-    char_list_.push_back(info2);
+    char_list_.push_back(modified_info);
     return;
   }
-  info2.set_char_type(CharType::kPiece);
+  modified_info.set_char_type(CharType::kPiece);
   for (wchar_t normalized_char : normalized) {
-    info2.set_unicode(normalized_char);
+    modified_info.set_unicode(normalized_char);
     text_buf_.AppendChar(normalized_char);
-    char_list_.push_back(info2);
+    char_list_.push_back(modified_info);
   }
 }
 
@@ -881,19 +889,19 @@ void CPDF_TextPage::ProcessTextObject(
     return;
   }
 
-  size_t count = mTextObjects.size();
+  size_t count = text_objects_.size();
   TransformedTextObject new_obj;
   new_obj.text_obj_ = pTextObj;
   new_obj.form_matrix_ = form_matrix;
   if (count == 0) {
-    mTextObjects.push_back(new_obj);
+    text_objects_.push_back(new_obj);
     return;
   }
   if (IsSameAsPreTextObject(pTextObj, pObjList, ObjPos)) {
     return;
   }
 
-  TransformedTextObject prev_obj = mTextObjects[count - 1];
+  TransformedTextObject prev_obj = text_objects_[count - 1];
   size_t nItem = prev_obj.text_obj_->CountItems();
   if (nItem == 0) {
     return;
@@ -922,24 +930,24 @@ void CPDF_TextPage::ProcessTextObject(
       display_matrix_.Transform(form_matrix.Transform(pTextObj->GetPos()));
   if (fabs(this_pos.y - prev_pos.y) > threshold * 2) {
     for (size_t i = 0; i < count; ++i) {
-      ProcessTextObject(mTextObjects[i]);
+      ProcessTextObject(text_objects_[i]);
     }
-    mTextObjects.clear();
-    mTextObjects.push_back(new_obj);
+    text_objects_.clear();
+    text_objects_.push_back(new_obj);
     return;
   }
 
   for (size_t i = count; i > 0; --i) {
-    TransformedTextObject prev_text_obj = mTextObjects[i - 1];
+    TransformedTextObject prev_text_obj = text_objects_[i - 1];
     CFX_PointF new_prev_pos =
         display_matrix_.Transform(prev_text_obj.form_matrix_.Transform(
             prev_text_obj.text_obj_->GetPos()));
     if (this_pos.x >= new_prev_pos.x) {
-      mTextObjects.insert(mTextObjects.begin() + i, new_obj);
+      text_objects_.insert(text_objects_.begin() + i, new_obj);
       return;
     }
   }
-  mTextObjects.insert(mTextObjects.begin(), new_obj);
+  text_objects_.insert(text_objects_.begin(), new_obj);
 }
 
 CPDF_TextPage::MarkedContentState CPDF_TextPage::PreMarkedContent(

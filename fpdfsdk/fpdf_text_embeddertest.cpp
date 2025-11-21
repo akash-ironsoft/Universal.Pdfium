@@ -1995,6 +1995,46 @@ TEST_F(FPDFTextEmbedderTest, CharBoxForLatinExtendedText) {
   EXPECT_NEAR(752.422f, rect.top, 0.001f);
 }
 
+TEST_F(FPDFTextEmbedderTest, Bug402562387) {
+  ASSERT_TRUE(OpenDocument("bug_402562387.pdf"));
+  ScopedPage page = LoadScopedPage(0);
+  ASSERT_TRUE(page);
+
+  ScopedFPDFTextPage text_page(FPDFText_LoadPage(page.get()));
+  ASSERT_TRUE(text_page);
+
+  int char_count = FPDFText_CountChars(text_page.get());
+  ASSERT_EQ(char_count, 4);
+
+  for (int i = 0; i < char_count; ++i) {
+    SCOPED_TRACE(testing::Message() << "Character " << i);
+
+    double char_left;
+    double char_right;
+    double char_bottom;
+    double char_top;
+    if (!FPDFText_GetCharBox(text_page.get(), i, &char_left, &char_right,
+                             &char_bottom, &char_top)) {
+      ADD_FAILURE() << "FPDFText_GetCharBox failed";
+      continue;
+    }
+
+    FS_RECTF loose_rect;
+    if (!FPDFText_GetLooseCharBox(text_page.get(), i, &loose_rect)) {
+      ADD_FAILURE() << "FPDFText_GetLooseCharBox failed";
+      continue;
+    }
+
+    EXPECT_LE(loose_rect.left, char_left);
+    EXPECT_GE(loose_rect.right, char_right);
+    EXPECT_LE(loose_rect.bottom, char_bottom);
+    EXPECT_GE(loose_rect.top, char_top);
+
+    EXPECT_GE(loose_rect.right - loose_rect.left, char_right - char_left);
+    EXPECT_GE(loose_rect.top - loose_rect.bottom, char_top - char_bottom);
+  }
+}
+
 TEST_F(FPDFTextEmbedderTest, Bug399689604) {
   ASSERT_TRUE(OpenDocument("bug_399689604.pdf"));
   ScopedPage page = LoadScopedPage(0);
@@ -2247,4 +2287,70 @@ TEST_F(FPDFTextEmbedderTest, TextObjectSetIsActive) {
     EXPECT_THAT(pdfium::span(buffer).first<kHelloGoodbyeTextSize>(),
                 ElementsAreArray(kHelloGoodbyeText));
   }
+}
+
+TEST_F(FPDFTextEmbedderTest, Bug425244539) {
+  static constexpr std::array<unsigned short, 6> kExpectedChars = {
+      'h', 'e', 'l', 'l', 'o', 0};
+
+  ASSERT_TRUE(OpenDocument("bug_425244539.pdf"));
+  ScopedPage page = LoadScopedPage(0);
+  ASSERT_TRUE(page);
+
+  ScopedFPDFTextPage textpage(FPDFText_LoadPage(page.get()));
+  ASSERT_TRUE(textpage);
+
+  std::array<unsigned short, 128> buffer = {};
+  int num_chars =
+      FPDFText_GetText(textpage.get(), 0, buffer.size(), buffer.data());
+  ASSERT_EQ(static_cast<int>(kExpectedChars.size()), num_chars);
+  EXPECT_THAT(pdfium::span(buffer).first<kExpectedChars.size()>(),
+              ElementsAreArray(kExpectedChars));
+
+  ScopedFPDFWideString hello = GetFPDFWideString(L"hello");
+
+  ScopedFPDFTextFind search(
+      FPDFText_FindStart(textpage.get(), hello.get(), 0, 0));
+  EXPECT_TRUE(search);
+  EXPECT_EQ(22, FPDFText_GetSchResultIndex(search.get()));
+  EXPECT_EQ(0, FPDFText_GetSchCount(search.get()));
+
+  EXPECT_TRUE(FPDFText_FindNext(search.get()));
+  EXPECT_EQ(22, FPDFText_GetSchResultIndex(search.get()));
+  EXPECT_EQ(5, FPDFText_GetSchCount(search.get()));
+}
+
+TEST_F(FPDFTextEmbedderTest, Bug431824298) {
+  // TODO(crbug.com/431824298): 0xfffe should be a dash.
+  static constexpr std::array<unsigned short, 19> kExpectedChars = {
+      '-', 'h', 'e', 'l', 'l', 'o',    '-',    '\r',   '\n', '-',
+      'w', 'o', 'r', 'l', 'd', 0xfffe, 0x501f, 0x6b3e, 0};
+
+  ASSERT_TRUE(OpenDocument("bug_431824298.pdf"));
+  ScopedPage page = LoadScopedPage(0);
+  ASSERT_TRUE(page);
+
+  ScopedFPDFTextPage textpage(FPDFText_LoadPage(page.get()));
+  ASSERT_TRUE(textpage);
+
+  std::array<unsigned short, 128> buffer = {};
+  int num_chars =
+      FPDFText_GetText(textpage.get(), 0, buffer.size(), buffer.data());
+  ASSERT_EQ(static_cast<int>(kExpectedChars.size()), num_chars);
+  EXPECT_THAT(pdfium::span(buffer).first<kExpectedChars.size()>(),
+              ElementsAreArray(kExpectedChars));
+
+  ScopedFPDFWideString world = GetFPDFWideString(L"-world-");
+
+  ScopedFPDFTextFind search(
+      FPDFText_FindStart(textpage.get(), world.get(), 0, 0));
+  EXPECT_TRUE(search);
+  EXPECT_EQ(0, FPDFText_GetSchResultIndex(search.get()));
+  EXPECT_EQ(0, FPDFText_GetSchCount(search.get()));
+
+  // TODO(crbug.com/431824298): Once 0xfffe in `kExpectedChars` is a dash, this
+  // search should succeed.
+  EXPECT_FALSE(FPDFText_FindNext(search.get()));
+  EXPECT_EQ(0, FPDFText_GetSchResultIndex(search.get()));
+  EXPECT_EQ(0, FPDFText_GetSchCount(search.get()));
 }

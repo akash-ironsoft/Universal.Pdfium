@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -511,15 +512,15 @@ bool CPDF_CIDFont::Load() {
     LoadSubstFont();
   }
 
-  RetainPtr<const CPDF_Object> pmap =
+  RetainPtr<const CPDF_Object> cmap =
       pCIDFontDict->GetDirectObjectFor("CIDToGIDMap");
-  if (pmap) {
-    RetainPtr<const CPDF_Stream> pMapStream(pmap->AsStream());
-    if (pMapStream) {
-      stream_acc_ = pdfium::MakeRetain<CPDF_StreamAcc>(std::move(pMapStream));
+  if (cmap) {
+    RetainPtr<const CPDF_Stream> cmap_stream(cmap->AsStream());
+    if (cmap_stream) {
+      stream_acc_ = pdfium::MakeRetain<CPDF_StreamAcc>(std::move(cmap_stream));
       stream_acc_->LoadAllDataFiltered();
-    } else if (font_file_ && pmap->IsName() &&
-               pmap->GetString() == "Identity") {
+    } else if (font_file_ && cmap->IsName() &&
+               cmap->GetString() == "Identity") {
       cid_is_gid_ = true;
     }
   }
@@ -720,7 +721,8 @@ int CPDF_CIDFont::GlyphFromCharCode(uint32_t charcode, bool* pVertGlyph) {
       charcode += 31;
       RetainPtr<CFX_Face> face = font_.GetFace();
       bool bMSUnicode = UseTTCharmapUnicode(face);
-      bool bMacRoman = !bMSUnicode && UseTTCharmapMacRoman(face);
+      bool bMacRoman =
+          !bMSUnicode && UseTTCharmap(face, CFX_Face::kMacRomanCmapId);
       FontEncoding base_encoding = FontEncoding::kStandard;
       if (bMSUnicode) {
         base_encoding = FontEncoding::kWinAnsi;
@@ -900,12 +902,10 @@ const CIDTransform* CPDF_CIDFont::GetCIDTransform(uint16_t cid) const {
   if (charset_ != CIDSET_JAPAN1 || font_file_) {
     return nullptr;
   }
+  const auto* pTransform = std::ranges::lower_bound(
+      kJapan1VerticalCIDs, cid, std::less<>{}, &CIDTransform::cid);
 
-  const auto* pBegin = std::begin(kJapan1VerticalCIDs);
-  const auto* pEnd = std::end(kJapan1VerticalCIDs);
-  const auto* pTransform = std::lower_bound(
-      pBegin, pEnd, cid,
-      [](const CIDTransform& entry, uint16_t cid) { return entry.cid < cid; });
-
-  return pTransform < pEnd && cid == pTransform->cid ? pTransform : nullptr;
+  return pTransform != std::end(kJapan1VerticalCIDs) && cid == pTransform->cid
+             ? pTransform
+             : nullptr;
 }

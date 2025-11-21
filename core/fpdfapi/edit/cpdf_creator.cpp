@@ -120,10 +120,10 @@ bool OutputIndex(IFX_ArchiveStream* archive, FX_FILESIZE offset) {
 
 }  // namespace
 
-CPDF_Creator::CPDF_Creator(CPDF_Document* pDoc,
+CPDF_Creator::CPDF_Creator(CPDF_Document* doc,
                            RetainPtr<IFX_RetainableWriteStream> archive)
-    : document_(pDoc),
-      parser_(pDoc->GetParser()),
+    : document_(doc),
+      parser_(doc->GetParser()),
       encrypt_dict_(parser_ ? parser_->GetEncryptDict() : nullptr),
       security_handler_(parser_ ? parser_->GetSecurityHandler() : nullptr),
       last_obj_num_(document_->GetLastObjNum()),
@@ -218,18 +218,16 @@ bool CPDF_Creator::WriteNewObjs() {
 void CPDF_Creator::InitNewObjNumOffsets() {
   for (const auto& pair : *document_) {
     const uint32_t objnum = pair.first;
-    if (is_incremental_ ||
-        pair.second->GetObjNum() == CPDF_Object::kInvalidObjNum) {
+    if (pair.second->GetObjNum() == CPDF_Object::kInvalidObjNum) {
       continue;
     }
-    if (parser_ && parser_->IsValidObjectNumber(objnum) &&
+
+    if (!is_incremental_ && parser_ && parser_->IsValidObjectNumber(objnum) &&
         !parser_->IsObjectFree(objnum)) {
       continue;
     }
     new_obj_num_array_.insert(
-        std::lower_bound(new_obj_num_array_.begin(), new_obj_num_array_.end(),
-                         objnum),
-        objnum);
+        std::ranges::lower_bound(new_obj_num_array_, objnum), objnum);
   }
 }
 

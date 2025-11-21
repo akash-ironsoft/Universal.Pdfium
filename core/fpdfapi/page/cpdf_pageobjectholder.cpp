@@ -39,14 +39,14 @@ bool FontData::operator<(const FontData& other) const {
 }
 
 CPDF_PageObjectHolder::CPDF_PageObjectHolder(
-    CPDF_Document* pDoc,
+    CPDF_Document* doc,
     RetainPtr<CPDF_Dictionary> dict,
     RetainPtr<CPDF_Dictionary> pPageResources,
     RetainPtr<CPDF_Dictionary> pResources)
     : page_resources_(std::move(pPageResources)),
       resources_(std::move(pResources)),
       dict_(std::move(dict)),
-      document_(pDoc) {
+      document_(doc) {
   DCHECK(dict_);
 }
 
@@ -197,6 +197,8 @@ bool CPDF_PageObjectHolder::InsertPageObjectAtIndex(
     return false;
   }
 
+  // Unsafe, but the compiler will not complain, because
+  // std::deque::iterator::operator++() has not been marked as unsafe yet.
   page_object_list_.insert(UNSAFE_TODO(page_object_list_.begin() + index),
                            std::move(page_obj));
   return true;
@@ -226,6 +228,8 @@ bool CPDF_PageObjectHolder::ErasePageObjectAtIndex(size_t index) {
     return false;
   }
 
+  // Unsafe, but the compiler will not complain, because
+  // std::deque::iterator::operator++() has not been marked as unsafe yet.
   page_object_list_.erase(UNSAFE_TODO(page_object_list_.begin() + index));
   return true;
 }
